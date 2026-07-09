@@ -18,11 +18,9 @@ def extrair_municipios() -> list[dict]:
 def carregar_municipios(municipios: list[dict]) -> None:
     linhas = []
     for m in municipios:
-        uf = (
-            m.get("microrregiao", {})
-            .get("mesorregiao", {})
-            .get("UF", {})
-        )
+        micro = m.get("microrregiao") or {}
+        meso = micro.get("mesorregiao") or {}
+        uf = meso.get("UF") or {}
         linhas.append((
             m["id"],
             m["nome"],
