@@ -130,7 +130,7 @@ def transformar_marts() -> None:
     conn.close()
 
 @dag(
-    schedule=None,
+    schedule="@daily",
     start_date=pendulum.datetime(2024, 1, 1, tz="America/Sao_Paulo"),
     catchup=False,
     tags=["ibge", "pipeline"],
