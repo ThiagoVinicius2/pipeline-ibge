@@ -12,5 +12,5 @@ SELECT DISTINCT ON (e.sigla)
 FROM raw.populacao p
 JOIN raw.municipios m ON m.id = p.municipio_id
 JOIN raw.estados e ON e.id = m.estado_id
-WHERE p.ano = 2021
+WHERE p.ano = (SELECT MAX(ano) FROM raw.populacao)
 ORDER BY e.sigla, p.populacao DESC;
