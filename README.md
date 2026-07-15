@@ -1,8 +1,8 @@
 # pipeline-ibge
 
-Pipeline de dados que extrai informações públicas do **IBGE** (estados, municípios e estimativas de população), armazena em um data warehouse **PostgreSQL** e as transforma em tabelas analíticas prontas para consumo. Toda a orquestração é feita com **Apache Airflow**, e o ambiente é 100% reproduzível via **Docker Compose**.
+Pipeline de dados que extrai informações públicas do **IBGE** (estados, municípios e estimativas anuais de população), armazena em um data warehouse **PostgreSQL** e as transforma em tabelas analíticas prontas para consumo. Toda a orquestração é feita com **Apache Airflow**, e o ambiente é 100% reproduzível via **Docker Compose**.
 
-Projeto construído exclusivamente com ferramentas open source, do zero, como estudo prático de engenharia de dados e do *Modern Data Stack*.
+Projeto construído do zero, exclusivamente com ferramentas open source, como estudo prático de engenharia de dados e do *Modern Data Stack*.
 
 ---
 
@@ -23,7 +23,20 @@ O pipeline é um único DAG (`pipeline_ibge`) com as etapas encadeadas por depen
 estados ─► municípios ─► população ─► marts
 ```
 
-Essa ordem não é arbitrária: ela reflete as chaves estrangeiras do modelo (`municipios` referencia `estados`; `populacao` referencia `municipios`; os `marts` cruzam as três tabelas).
+Essa ordem não é arbitrária: reflete as chaves estrangeiras do modelo (`municipios` referencia `estados`; `populacao` referencia `municipios`; os `marts` cruzam as três tabelas).
+
+### Dimensões e fato temporal
+
+O pipeline lida com dois tipos de dado de naturezas distintas:
+
+- **Dimensões** (estados, municípios) — não variam com o tempo. São carregadas via **UPSERT** (`INSERT ... ON CONFLICT DO UPDATE`), o que permite recarregá-las a qualquer momento sem apagar os dados dependentes.
+- **Fato temporal** (população) — uma linha por município **e ano**, com chave primária composta `(municipio_id, ano)`. Cada execução carrega apenas o ano correspondente à sua *data lógica*, removendo antes só aquele ano (`DELETE ... WHERE ano = %s`) e preservando os demais.
+
+### Agendamento e backfill
+
+O DAG roda com `schedule="@yearly"` e `catchup=True`, a partir de 2015. Na primeira ativação, o Airflow executa automaticamente um *run* por ano (**backfill**), cada um carregando a população do seu respectivo ano a partir da data lógica. O parâmetro `max_active_runs=1` garante execução sequencial.
+
+Todas as tarefas têm `retries=3` com intervalo de 30s, para absorver falhas transitórias das APIs (rate limiting, timeouts).
 
 ---
 
@@ -31,13 +44,13 @@ Essa ordem não é arbitrária: ela reflete as chaves estrangeiras do modelo (`m
 
 | Ferramenta | Papel no projeto |
 |------------|------------------|
-| **Apache Airflow 3.3.0** | Orquestração — define a ordem das tarefas, executa, registra logs e agenda |
-| **PostgreSQL 16** | Data warehouse — armazena os dados e onde as transformações SQL rodam |
+| **Apache Airflow 3.3.0** | Orquestração — ordem das tarefas, execução, logs, agendamento e backfill |
+| **PostgreSQL 16** | Data warehouse — armazena os dados e executa as transformações SQL |
 | **Docker + Docker Compose** | Ambiente reproduzível — sobe Airflow e Postgres com um comando |
-| **Python** | Extração (`requests`) e definição das DAGs (TaskFlow API) |
+| **Python** | Extração (`requests`) e definição do DAG (TaskFlow API) |
 | **Git + GitHub Codespaces** | Versionamento e ambiente de desenvolvimento na nuvem |
 
-O Airflow roda com **LocalExecutor** (mais leve, ideal para desenvolvimento). Há dois bancos: o de *metadados* do Airflow e um `warehouse` separado, onde moram os dados do projeto.
+O Airflow roda com **LocalExecutor**. Há dois bancos: o de *metadados* do Airflow e um `warehouse` separado, onde moram os dados do projeto.
 
 ---
 
@@ -51,6 +64,8 @@ Todas as APIs do IBGE são públicas e não exigem autenticação.
 - **Agregados (SIDRA)** — estimativas de população (tabela 6579, variável 9324)
   `https://servicodados.ibge.gov.br/api/v3/agregados/6579/periodos/{ano}/variaveis/9324?localidades=N6[all]`
 
+> Nem todos os anos possuem estimativa (anos de Censo, como 2010 e 2022, não têm). Nesses casos a API retorna `[]` com status HTTP 200 — o pipeline trata essa resposta e conclui o *run* sem carregar nada, em vez de falhar.
+
 ---
 
 ## Estrutura do projeto
@@ -58,12 +73,13 @@ Todas as APIs do IBGE são públicas e não exigem autenticação.
 ```
 pipeline-ibge/
 ├── dags/
-│   └── pipeline_ibge.py       # o pipeline completo (extração → carga → transformação)
+│   └── pipeline_ibge.py                        # pipeline completo (extração → carga → transformação)
 ├── sql/
-│   └── marts_municipio_mais_populoso_uf.sql   # transformação da camada marts
-├── include/                   # reservado para funções auxiliares (uso futuro)
-├── docker-compose.yaml        # Airflow + Postgres (metadados e warehouse)
-├── .env                       # AIRFLOW_UID e FERNET_KEY (não versionado)
+│   ├── marts_municipio_mais_populoso_uf.sql    # maior município de cada estado
+│   └── marts_populacao_uf_evolucao.sql         # série anual e variação por estado
+├── include/                                    # reservado para funções auxiliares (uso futuro)
+├── docker-compose.yaml                         # Airflow + Postgres (metadados e warehouse)
+├── .env                                        # AIRFLOW_UID e FERNET_KEY (não versionado)
 ├── .gitignore
 └── README.md
 ```
@@ -106,7 +122,7 @@ docker compose up -d
 | Login / Password | `dados` / `dados` |
 | Port | `5432` |
 
-**6. Ativar o DAG `pipeline_ibge`** na interface. Ele roda automaticamente todo dia (`@daily`) ou pode ser disparado manualmente.
+**6. Ativar o DAG `pipeline_ibge`.** O backfill começa automaticamente, executando um *run* por ano desde 2015.
 
 Para consultar os dados diretamente no banco:
 
@@ -118,36 +134,50 @@ docker compose exec warehouse psql -U dados -d warehouse
 
 ## O que o pipeline produz
 
-Ao final de uma execução, o warehouse contém:
+### Camada `raw`
 
 | Tabela | Conteúdo | Linhas |
 |--------|----------|--------|
 | `raw.estados` | 27 unidades da federação | 27 |
-| `raw.municipios` | municípios brasileiros (com FK para estados) | 5.571 |
-| `raw.populacao` | estimativa de população por município e ano | ~5.570 |
-| `marts.municipio_mais_populoso_uf` | o município mais populoso de cada estado | 27 |
+| `raw.municipios` | municípios brasileiros (FK para estados) | 5.571 |
+| `raw.populacao` | população por município **e ano** (2015–2025) | ~50.000 |
 
-Exemplo de consulta analítica possível (município mais populoso por estado), que revela padrões reais — como o fato de o maior município do Espírito Santo ser Serra (não a capital) e o de Santa Catarina ser Joinville.
+### Camada `marts`
+
+| Tabela | Conteúdo |
+|--------|----------|
+| `marts.municipio_mais_populoso_uf` | o município mais populoso de cada estado, sempre no ano mais recente disponível |
+| `marts.populacao_uf_evolucao` | série anual de população por estado, com variação absoluta e percentual ano a ano |
+
+---
+
+## Nota metodológica: quebra de série
+
+As estimativas do IBGE mudaram de base após o **Censo de 2022**. Os anos de 2015 a 2021 derivam do Censo 2010; 2024 e 2025 derivam do Censo 2022. Comparar valores entre as duas séries produz variações **falsas** — São Paulo, por exemplo, aparenta ter "perdido" 675 mil habitantes entre 2021 e 2024, quando o que mudou foi a metodologia.
+
+O mart `populacao_uf_evolucao` trata isso na modelagem: a coluna `serie_metodologica` identifica cada série, e o cálculo de variação usa `PARTITION BY estado_sigla, serie_metodologica`. Assim, a *window function* nunca compara através da fronteira entre séries — a variação do primeiro ano de cada série é `NULL`, sinalizando "não comparável" em vez de exibir um número inválido.
 
 ---
 
 ## Conceitos aplicados
 
 - **Padrão de camadas `raw` → `marts`** — separação entre dado bruto e dado tratado.
-- **Idempotência** — rodar o pipeline novamente não duplica nem corrompe dados (`TRUNCATE`/`DELETE` antes de inserir).
-- **Integridade referencial** — chaves primárias e estrangeiras garantindo consistência entre tabelas.
-- **Robustez a dados imperfeitos** — tratamento de valores nulos e sentinelas não-numéricas do IBGE.
-- **Orquestração de dependências** — ordem de execução garantida via operador `>>` da TaskFlow API.
-- **Agendamento** — execução automática recorrente sem intervenção manual.
+- **Idempotência** — reexecutar não duplica nem corrompe dados (`UPSERT` nas dimensões, `DELETE` por ano no fato).
+- **Integridade referencial** — chaves primárias (simples e compostas) e estrangeiras garantindo consistência.
+- **Robustez a dados imperfeitos** — tratamento de valores nulos, sentinelas não-numéricas e respostas vazias com status 200.
+- **Orquestração de dependências** — ordem garantida via operador `>>` da TaskFlow API.
+- **Data lógica e backfill** — cada execução processa o período que representa; o histórico é reconstruído automaticamente.
+- **Resiliência** — `retries` para absorver falhas transitórias de APIs externas.
+- **SQL analítico** — CTEs (`WITH`), *window functions* (`LAG ... OVER (PARTITION BY ...)`), `CASE WHEN` e `JOIN` entre múltiplas tabelas.
 
 ---
 
 ## Próximos passos possíveis
 
-- Usar a *data lógica* do Airflow para carregar múltiplos anos de população automaticamente.
-- Adicionar tarefas de validação de qualidade de dados.
+- Adicionar tarefas de validação de qualidade de dados (ex.: falhar se vierem menos de 5.000 municípios).
 - Expandir a camada `marts` (análises por região, por faixa de população).
 - Refatorar a lógica de extração para módulos reutilizáveis em `include/`.
+- Carregar a série histórica completa (o IBGE disponibiliza estimativas desde 2001).
 
 ---
 
