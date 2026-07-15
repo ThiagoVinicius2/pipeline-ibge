@@ -9,6 +9,10 @@ WITH populacao_uf AS (
         e.nome             AS estado_nome,
         e.regiao           AS regiao,
         p.ano              AS ano,
+        CASE
+            WHEN p.ano <= 2021 THEN 'pos-censo-2010'
+            ELSE 'pos-censo-2022'
+        END                AS serie_metodologica,
         SUM(p.populacao)   AS populacao_total
     FROM raw.populacao p
     JOIN raw.municipios m ON m.id = p.municipio_id
@@ -20,14 +24,20 @@ SELECT
     estado_nome,
     regiao,
     ano,
+    serie_metodologica,
     populacao_total,
-    LAG(populacao_total) OVER (PARTITION BY estado_sigla ORDER BY ano)
-        AS populacao_ano_anterior,
-    populacao_total - LAG(populacao_total) OVER (PARTITION BY estado_sigla ORDER BY ano)
-        AS variacao_absoluta,
+    LAG(populacao_total) OVER (
+        PARTITION BY estado_sigla, serie_metodologica ORDER BY ano
+    ) AS populacao_ano_anterior,
+    populacao_total - LAG(populacao_total) OVER (
+        PARTITION BY estado_sigla, serie_metodologica ORDER BY ano
+    ) AS variacao_absoluta,
     ROUND(
-        100.0 * (populacao_total - LAG(populacao_total) OVER (PARTITION BY estado_sigla ORDER BY ano))
-        / LAG(populacao_total) OVER (PARTITION BY estado_sigla ORDER BY ano),
+        100.0 * (populacao_total - LAG(populacao_total) OVER (
+            PARTITION BY estado_sigla, serie_metodologica ORDER BY ano
+        )) / LAG(populacao_total) OVER (
+            PARTITION BY estado_sigla, serie_metodologica ORDER BY ano
+        ),
         2
     ) AS variacao_percentual
 FROM populacao_uf
