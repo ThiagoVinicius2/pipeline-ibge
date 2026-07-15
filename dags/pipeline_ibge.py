@@ -155,11 +155,20 @@ def carregar_populacao(payload: dict) -> None:
 
 @task
 def transformar_marts() -> None:
-    sql = (SQL_DIR / "marts_municipio_mais_populoso_uf.sql").read_text(encoding="utf-8")
+    arquivos = [
+        "marts_municipio_mais_populoso_uf.sql",
+        "marts_populacao_uf_evolucao.sql",
+    ]
+
     hook = PostgresHook(postgres_conn_id="warehouse")
     conn = hook.get_conn()
     cursor = conn.cursor()
-    cursor.execute(sql)
+
+    for nome in arquivos:
+        sql = (SQL_DIR / nome).read_text(encoding="utf-8")
+        cursor.execute(sql)
+        print(f"Executado: {nome}")
+
     conn.commit()
     cursor.close()
     conn.close()
