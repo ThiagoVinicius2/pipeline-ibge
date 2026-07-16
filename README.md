@@ -2,7 +2,20 @@
 
 Pipeline de dados que extrai informações públicas do **IBGE** (estados, municípios e estimativas anuais de população), armazena em um data warehouse **PostgreSQL** e as transforma em tabelas analíticas prontas para consumo. Toda a orquestração é feita com **Apache Airflow**, e o ambiente é 100% reproduzível via **Docker Compose**.
 
-Projeto construído do zero, exclusivamente com ferramentas open source, como estudo prático de engenharia de dados e do *Modern Data Stack*.
+Construído do zero, exclusivamente com ferramentas open source do *Modern Data Stack*.
+
+![Airflow](https://img.shields.io/badge/Apache%20Airflow-3.3.0-017CEE?logo=apacheairflow&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)
+![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)
+
+---
+
+## Em uma linha
+
+**5.571 municípios · ~50 mil registros de população · backfill anual desde 2015 · DAG idempotente · quebra de série metodológica tratada na modelagem.**
+
+O ponto mais interessante do projeto não é técnico: as estimativas do IBGE mudaram de base após o Censo de 2022, e comparar 2021 com 2024 diretamente faz São Paulo "perder" 675 mil habitantes — variação que nunca existiu. A solução está em [Nota metodológica](#nota-metodológica-quebra-de-série).
 
 ---
 
@@ -157,6 +170,8 @@ As estimativas do IBGE mudaram de base após o **Censo de 2022**. Os anos de 201
 
 O mart `populacao_uf_evolucao` trata isso na modelagem: a coluna `serie_metodologica` identifica cada série, e o cálculo de variação usa `PARTITION BY estado_sigla, serie_metodologica`. Assim, a *window function* nunca compara através da fronteira entre séries — a variação do primeiro ano de cada série é `NULL`, sinalizando "não comparável" em vez de exibir um número inválido.
 
+A decisão de fundo: um pipeline que entrega número errado com confiança é pior que um pipeline quebrado. O quebrado avisa.
+
 ---
 
 ## Conceitos aplicados
@@ -172,13 +187,16 @@ O mart `populacao_uf_evolucao` trata isso na modelagem: a coluna `serie_metodolo
 
 ---
 
-## Próximos passos possíveis
+## Roadmap
 
-- Adicionar tarefas de validação de qualidade de dados (ex.: falhar se vierem menos de 5.000 municípios).
-- Expandir a camada `marts` (análises por região, por faixa de população).
-- Refatorar a lógica de extração para módulos reutilizáveis em `include/`.
-- Carregar a série histórica completa (o IBGE disponibiliza estimativas desde 2001).
+- Tarefas de validação de qualidade de dados (ex.: falhar se vierem menos de 5.000 municípios).
+- Expansão da camada `marts` (análises por região, por faixa de população).
+- Refatoração da lógica de extração para módulos reutilizáveis em `include/`.
+- Carga da série histórica completa (o IBGE disponibiliza estimativas desde 2001).
 
 ---
 
-*Projeto de estudo — engenharia de dados com ferramentas open source.*
+## Autor
+
+**Thiago Vinicius** — Analytics Engineer | Analista de Dados & BI
+[LinkedIn](https://www.linkedin.com/in/thiagovinicius1/) · [GitHub](https://github.com/ThiagoVinicius2)
